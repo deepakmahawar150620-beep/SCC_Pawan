@@ -2,25 +2,27 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
-from io import BytesIO
+import io
 
-# ✅ Load Excel file from GitHub
+# App title
+st.set_page_config(page_title="SCC Graph Explorer", layout="centered")
+st.title("📈 SCC Risk Graph Explorer")
+
+# Load Excel from GitHub
 url = "https://raw.githubusercontent.com/deepakmahawar150620-beep/SCC_Pawan/main/Pipeline_data.xlsx"
 df = pd.read_excel(url, engine="openpyxl")
-
-# ✅ Clean column names
 df.columns = [col.strip() for col in df.columns]
 
-# ✅ Clean and convert specific columns
+# Clean and process data
+if 'OFF PSP (VE V)' in df.columns:
+    df['OFF PSP (VE V)'] = df['OFF PSP (VE V)'].astype(float).abs()
+
 if 'Hoop stress% of SMYS' in df.columns:
     df['Hoop stress% of SMYS'] = df['Hoop stress% of SMYS'].astype(str).str.replace('%', '').astype(float)
     if df['Hoop stress% of SMYS'].max() < 10:
         df['Hoop stress% of SMYS'] *= 100
 
-if 'OFF PSP (VE V)' in df.columns:
-    df['OFF PSP (VE V)'] = df['OFF PSP (VE V)'].astype(float).abs()
-
-# ✅ Dropdown options and labels
+# Dropdown setup
 plot_columns = {
     'Depth (mm)': 'Depth (mm)',
     'OFF PSP (VE V)': 'OFF PSP (-ve Volt)',
@@ -33,13 +35,10 @@ plot_columns = {
     'Pipe Age': 'Pipe Age'
 }
 
-st.title("📈 SCC Risk Assessment Graph Viewer")
-
-# ✅ Select column
-selected_col = st.selectbox("Select a parameter to compare with Stationing (m):", list(plot_columns.keys()))
+selected_col = st.selectbox("Select a parameter to compare with Stationing:", list(plot_columns.keys()))
 label = plot_columns[selected_col]
 
-# ✅ Create Plotly graph
+# Generate the graph
 fig = go.Figure()
 fig.add_trace(go.Scatter(
     x=df['Stationing (m)'],
@@ -50,48 +49,37 @@ fig.add_trace(go.Scatter(
     marker=dict(size=6)
 ))
 
-# ✅ Threshold lines
+# Add threshold lines
 if label == 'Hoop Stress (% of SMYS)':
-    fig.add_shape(type='line',
-        x0=df['Stationing (m)'].min(),
-        x1=df['Stationing (m)'].max(),
-        y0=60,
-        y1=60,
-        line=dict(color='red', width=2, dash='dash')
-    )
+    fig.add_shape(type='line', x0=df['Stationing (m)'].min(), x1=df['Stationing (m)'].max(),
+                  y0=60, y1=60, line=dict(color='red', dash='dash'))
 
 elif label == 'OFF PSP (-ve Volt)':
     for yval in [0.85, 1.2]:
-        fig.add_shape(type='line',
-            x0=df['Stationing (m)'].min(),
-            x1=df['Stationing (m)'].max(),
-            y0=yval,
-            y1=yval,
-            line=dict(color='red', width=2, dash='dash')
-        )
+        fig.add_shape(type='line', x0=df['Stationing (m)'].min(), x1=df['Stationing (m)'].max(),
+                      y0=yval, y1=yval, line=dict(color='red', dash='dash'))
 
-# ✅ Layout customization
+# Final layout formatting
 fig.update_layout(
     title=f"Stationing vs {label}",
     xaxis_title="Stationing (m)",
     yaxis_title=label,
-    height=550,
+    height=500,
     template='plotly_white',
     xaxis=dict(showline=True, linecolor='black', mirror=True),
     yaxis=dict(showline=True, linecolor='black', mirror=True, gridcolor='lightgray'),
-    margin=dict(l=60, r=40, t=50, b=60),
-    showlegend=False
+    margin=dict(l=60, r=40, t=50, b=60)
 )
 
-# ✅ Show Plot
+# Show graph
 st.plotly_chart(fig, use_container_width=True)
 
-# ✅ Export to high-res PNG using kaleido
-buffer = BytesIO()
-pio.write_image(fig, buffer, format="png", width=1400, height=700, scale=3)
+# HTML download export
+html_buffer = io.StringIO()
+pio.write_html(fig, file=html_buffer, include_plotlyjs='cdn')
 st.download_button(
-    label="📥 Download High-Quality Graph (PNG)",
-    data=buffer.getvalue(),
-    file_name=f"Stationing_vs_{label.replace(' ', '_')}.png",
-    mime="image/png"
+    label="⬇️ Download High-Quality Graph as HTML",
+    data=html_buffer.getvalue(),
+    file_name=f"{label.replace(' ', '_')}_graph.html",
+    mime="text/html"
 )
