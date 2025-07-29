@@ -1,28 +1,111 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import plotly.io as pio
 import io
 
-# App title
-st.set_page_config(page_title="SCC Graph Explorer", layout="centered")
+# --------------------------
+# PAGE CONFIG
+# --------------------------
+st.set_page_config(page_title="📊 SCC Risk Graph Explorer", layout="centered")
 st.title("📈 SCC Risk Graph Explorer")
 
-# Load Excel from GitHub
-url = "https://raw.githubusercontent.com/deepakmahawar150620-beep/SCC_Pawan/main/Pipeline_data.xlsx"
-df = pd.read_excel(url, engine="openpyxl")
-df.columns = [col.strip() for col in df.columns]
+# --------------------------
+# UPLOAD EXCEL FILE
+# --------------------------
+uploaded_file = st.file_uploader("📤 Upload Excel file (.xlsx)", type=["xlsx"])
 
-# Clean and process data
+# --------------------------
+# LOAD EXCEL DATA
+# --------------------------
+@st.cache_data(show_spinner=False)
+def load_excel_data(file):
+    df = pd.read_excel(file, engine="openpyxl")
+    df.columns = df.columns.str.strip()
+    return df
+
+@st.cache_data
+def load_default_data():
+    url = "https://raw.githubusercontent.com/deepakmahawar150620-beep/SCC_Pawan/main/Pipeline_data.xlsx"
+    df = pd.read_excel(url, engine="openpyxl")
+    df.columns = df.columns.str.strip()
+    return df
+
+# --------------------------
+# SELECT WHICH DATA TO USE
+# --------------------------
+if uploaded_file:
+    df = load_excel_data(uploaded_file)
+    st.success("✅ Uploaded file loaded successfully.")
+else:
+    df = load_default_data()
+    st.info("ℹ️ Showing default data from GitHub. Upload your Excel file to override.")
+
+# --------------------------
+# CLEANING / CONVERSIONS
+# --------------------------
 if 'OFF PSP (VE V)' in df.columns:
-    df['OFF PSP (VE V)'] = df['OFF PSP (VE V)'].astype(float).abs()
+    df['OFF PSP (VE V)'] = pd.to_numeric(df['OFF PSP (VE V)'], errors='coerce').abs()
 
 if 'Hoop stress% of SMYS' in df.columns:
-    df['Hoop stress% of SMYS'] = df['Hoop stress% of SMYS'].astype(str).str.replace('%', '').astype(float)
+    df['Hoop stress% of SMYS'] = pd.to_numeric(df['Hoop stress% of SMYS'].astype(str).str.replace('%', ''), errors='coerce')
     if df['Hoop stress% of SMYS'].max() < 10:
         df['Hoop stress% of SMYS'] *= 100
 
-# Dropdown setup
+# --------------------------
+# RISK SCORING FUNCTIONS
+# --------------------------
+def scc_risk_score(row):
+    score = 0
+    try:
+        if float(row['Hoop stress% of SMYS']) >= 60:
+            score += 10
+        if isinstance(row['CoatingType'], str) and 'plant cte' in row['CoatingType'].lower():
+            score += 10
+        if float(row['Distance from Pump(KM)']) < 32:
+            score += 10
+        if float(row['OFF PSP (VE V)']) > 1.2:
+            score += 5
+        if float(row['Pipe Age']) > 10:
+            score += 10
+        if float(row['Temperature']) > 38:
+            score += 10
+    except:
+        pass
+    return score
+
+def weighted_risk_score(row):
+    try:
+        stress = float(row['Hoop stress% of SMYS'])
+        distance = float(row['Distance from Pump(KM)'])
+        psp = float(row['OFF PSP (VE V)'])
+        return 0.6 * stress + 0.2 * distance + 0.2 * psp
+    except:
+        return 0
+
+# --------------------------
+# CALCULATE AND DISPLAY SCC RISK
+# --------------------------
+df['SCC Score'] = df.apply(scc_risk_score, axis=1)
+df['Weighted Risk Score'] = df.apply(weighted_risk_score, axis=1)
+df['SCC Risk Level'] = pd.cut(df['SCC Score'], bins=[-1, 19, 34, 55], labels=['Low', 'Moderate', 'High'])
+
+st.subheader("📄 SCC Risk Classification Table")
+st.dataframe(df, use_container_width=True)
+st.download_button("📥 Download Full Risk Data", df.to_csv(index=False), file_name="scc_risk_assessment.csv")
+
+# --------------------------
+# TOP 50 HIGH-RISK LOCATIONS
+# --------------------------
+top_50 = df[df['SCC Risk Level'] == 'High'].sort_values(by='Weighted Risk Score', ascending=False).head(50)
+st.subheader("🔥 Top 50 High-Risk Locations")
+st.dataframe(top_50, use_container_width=True)
+st.download_button("⬇️ Download Top 50 High Risk", top_50.to_csv(index=False), file_name="top_50_scc_risks.csv")
+
+# --------------------------
+# PLOT OPTIONS
+# --------------------------
 plot_columns = {
     'Depth (mm)': 'Depth (mm)',
     'OFF PSP (VE V)': 'OFF PSP (-ve Volt)',
@@ -35,10 +118,12 @@ plot_columns = {
     'Pipe Age': 'Pipe Age'
 }
 
-selected_col = st.selectbox("Select a parameter to compare with Stationing:", list(plot_columns.keys()))
+selected_col = st.selectbox("📌 Select a parameter to compare with Stationing:", list(plot_columns.keys()))
 label = plot_columns[selected_col]
 
-# Generate the graph
+# --------------------------
+# GENERATE THE GRAPH
+# --------------------------
 fig = go.Figure()
 fig.add_trace(go.Scatter(
     x=df['Stationing (m)'],
@@ -49,17 +134,18 @@ fig.add_trace(go.Scatter(
     marker=dict(size=6)
 ))
 
-# Add threshold lines
 if label == 'Hoop Stress (% of SMYS)':
-    fig.add_shape(type='line', x0=df['Stationing (m)'].min(), x1=df['Stationing (m)'].max(),
-                  y0=60, y1=60, line=dict(color='red', dash='dash'))
-
+    fig.add_shape(type='line',
+                  x0=df['Stationing (m)'].min(), x1=df['Stationing (m)'].max(),
+                  y0=60, y1=60,
+                  line=dict(color='red', dash='dash'))
 elif label == 'OFF PSP (-ve Volt)':
     for yval in [0.85, 1.2]:
-        fig.add_shape(type='line', x0=df['Stationing (m)'].min(), x1=df['Stationing (m)'].max(),
-                      y0=yval, y1=yval, line=dict(color='red', dash='dash'))
+        fig.add_shape(type='line',
+                      x0=df['Stationing (m)'].min(), x1=df['Stationing (m)'].max(),
+                      y0=yval, y1=yval,
+                      line=dict(color='red', dash='dash'))
 
-# Final layout formatting
 fig.update_layout(
     title=f"Stationing vs {label}",
     xaxis_title="Stationing (m)",
@@ -71,14 +157,19 @@ fig.update_layout(
     margin=dict(l=60, r=40, t=50, b=60)
 )
 
-# Show graph
+# --------------------------
+# DISPLAY GRAPH
+# --------------------------
 st.plotly_chart(fig, use_container_width=True)
 
-# HTML download export
+# --------------------------
+# DOWNLOAD GRAPH AS HTML
+# --------------------------
 html_buffer = io.StringIO()
 pio.write_html(fig, file=html_buffer, include_plotlyjs='cdn')
+
 st.download_button(
-    label="⬇️ Download High-Quality Graph as HTML",
+    label="⬇️ Download Graph as HTML",
     data=html_buffer.getvalue(),
     file_name=f"{label.replace(' ', '_')}_graph.html",
     mime="text/html"
